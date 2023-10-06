@@ -34,6 +34,7 @@ function getBaseUrl() {
 const rule = {
   meta: {
     type: 'suggestion',
+    fixable: 'code',
     docs: {
       description:
         'Кастомный плагин, смотрит на импорты и проверяет чтобы не было вложенных' +
@@ -85,7 +86,12 @@ const rule = {
 
   create(context) {
     const baseUrlInSystem = getBaseUrl();
-    const {maxLevel = 3, baseUrl = '@', noAlias = false} = context.options[0] || {};
+    const {
+      aliasDirectories = ['src'], // Define the directories you want to enforce aliases for.
+      maxLevel = 3,
+      baseUrl = '@',
+      noAlias = false,
+    } = context.options[0] || {};
 
     return {
       ImportDeclaration(node) {
@@ -98,31 +104,71 @@ const rule = {
           const absoluteImportPath = path.normalize(
             path.join(path.dirname(filename), importSource),
           );
-          const expectedPath = path.relative(
-            baseUrlInSystem,
-            absoluteImportPath,
-          );
-          const pathWithoutBaseFolder = expectedPath.substring(
-            expectedPath.indexOf('/'),
-            expectedPath.length,
-          );
-          const resultPath = noAlias ? pathWithoutBaseFolder.substring(1) : `${baseUrl}${pathWithoutBaseFolder}`;
 
-          if (nestedPathsCount > maxLevel) {
+          // Check if the import is from one of the alias directories.
+          const isAliasDirectory = aliasDirectories.some((directory) =>
+            absoluteImportPath.includes(`/${directory}/`)
+          );
+
+          if (isAliasDirectory) {
+            const expectedPath = path.relative(
+              baseUrlInSystem,
+              absoluteImportPath,
+            );
+            const pathWithoutBaseFolder = expectedPath.substring(
+              expectedPath.indexOf('/'),
+              expectedPath.length,
+            );
+            const resultPath = noAlias
+              ? pathWithoutBaseFolder.substring(1)
+              : `${baseUrl}${pathWithoutBaseFolder}`;
+
+            if (nestedPathsCount > maxLevel) {
+              context.report({
+                node,
+                messageId: 'main',
+                fix: function (fixer) {
+                  return fixer.replaceText(node.source, `'${resultPath}'`);
+                },
+                suggest: [
+                  {
+                    desc: `Replace relative import with ${resultPath}`,
+                    fix: function (fixer) {
+                      return fixer.replaceText(node.source, `'${resultPath}'`);
+                    },
+                  },
+                ],
+              });
+            }
+          }
+        }
+
+        // Detect reversed imports and fix them.
+        if (importSource.startsWith(baseUrl)) {
+          const currentFile = context.getFilename();
+          const importedModulePath = path.join(baseUrlInSystem, importSource.substring(baseUrl.length));
+          const relativeImportPath = path.relative(path.dirname(currentFile), importedModulePath);
+
+          if (!relativeImportPath.startsWith('.')) {
+            // The import is reversed; it should be relative.
             context.report({
               node,
               messageId: 'main',
+              fix: function (fixer) {
+                return fixer.replaceText(node.source, `'./${relativeImportPath}'`);
+              },
               suggest: [
                 {
-                  desc: `Replace relative import with ${resultPath}`,
+                  desc: `Replace absolute import with './${relativeImportPath}'`,
                   fix: function (fixer) {
-                    return fixer.replaceText(node.source, `'${resultPath}'`);
+                    return fixer.replaceText(node.source, `'./${relativeImportPath}'`);
                   },
                 },
               ],
             });
           }
         }
+
       },
     };
   },
